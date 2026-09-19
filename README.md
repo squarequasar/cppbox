@@ -6,7 +6,7 @@ It bundles a small launcher, an isolated VS Code setup flow, a C++ compiler setu
 
 The goal is simple: download one setup file, run it, open CppBox, write C++.
 
-![CppBox logo](assets/CppBox_clean_logo.png)
+![CppBox banner](assets/CppBox_banner.png)
 
 ## Download
 
