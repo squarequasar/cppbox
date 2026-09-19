@@ -1,0 +1,22 @@
+# Local/editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build/debug output
+*.pdb
+*.obj
+*.o
+*.tmp
+*.log
+
+# Generated payload header can get huge and should be rebuilt locally
+payload.h
+
+# Local CppBox runtime folders
+cppbox/
+workspace/
+_cppbox_internal/app/
+_cppbox_internal/cache/
+_cppbox_internal/logs/
+_cppbox_internal/toolchain/

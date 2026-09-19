@@ -1,0 +1,53 @@
+CppBox build notes
+
+============================================================
+
+This repository contains the final public source/artifact layout for CppBox v1.0.0.
+
+The final release artifact is already included in:
+
+release/CppBox_v1.0.0.zip
+
+============================================================
+
+Important
+
+The setup exe embeds a generated payload ZIP.
+
+In the original local build tree, that generated payload was written into:
+
+src/launcher_src/payload.h
+
+That file is intentionally not included in this repository because it is generated and large.
+
+============================================================
+
+Main components
+
+Launcher.ps1
+Graphical user interface for CppBox.
+
+Setup-CppBox.ps1
+Downloads/extracts VS Code and WinLibs GCC, prepares the portable workspace, and opens VS Code.
+
+CppBoxLauncher.c
+Small Windows GUI executable wrapper that starts Launcher.ps1 without showing a console window.
+
+CppBoxSetup.c
+Single-file setup executable source. It extracts the embedded payload, creates the desktop shortcut, launches CppBox, and schedules setup self-delete.
+
+============================================================
+
+Release
+
+Final release:
+
+v1.0.0
+
+Based on:
+
+v0.9.0-rc.4
+
+============================================================
+
+made by squarequasar
