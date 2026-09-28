@@ -1,8 +1,21 @@
-# CppBox Launcher
+﻿# CppBox Launcher
 # made by squarequasar
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CppBoxWindow {
+    [DllImport("user32.dll")] public static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
+    public static void Drag(IntPtr hwnd) {
+        ReleaseCapture();
+        SendMessage(hwnd, 0xA1, new IntPtr(2), IntPtr.Zero);
+    }
+}
+'@
+
 
 function T {
     param([string]$Base64)
@@ -53,7 +66,7 @@ function Get-CppBoxState {
         CodeReady = [bool]$code
         CompilerReady = [bool]$gpp
         ExtensionReady = $extension
-        Ready = ([bool]$code -and [bool]$gpp)
+        Ready = ([bool]$code -and [bool]$gpp -and -not (Test-Path -LiteralPath (Join-Path $Internal 'install-incomplete')))
     }
 }
 
@@ -74,47 +87,66 @@ function Invoke-HiddenPowerShell {
     return $process.ExitCode
 }
 
-function Invoke-HiddenPowerShellWithProgress {
-    param([string[]]$Arguments, [string]$ActionText)
-    $progressFile = Join-Path $Logs 'launcher_progress.txt'
-    Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue
-    $Arguments = $Arguments + @('-ProgressFile', $progressFile)
-    $allArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass') + $Arguments
-    $escaped = $allArguments | ForEach-Object {
-        '"' + ($_ -replace '"', '\"') + '"'
-    }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'powershell.exe'
-    $psi.Arguments = ($escaped -join ' ')
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $process = [System.Diagnostics.Process]::Start($psi)
+function Request-InstallCancel {
+    if (-not $script:InstallProcess -or $script:CancelRequested) { return }
+    [IO.File]::WriteAllText($script:CancelPath, 'cancel')
+    $script:CancelRequested = $true
+    $cancelButton.Enabled = $false
+    $cancelButton.Text = 'Отменяю...'
+    $busyLabel.Text = 'Останавливаем установку...'
+}
 
-    $lastPercent = -1
-    while (-not $process.HasExited) {
-        if (Test-Path -LiteralPath $progressFile) {
-            $rawProgress = Get-Content -LiteralPath $progressFile -ErrorAction SilentlyContinue | Select-Object -Last 1
-            if ($rawProgress -match '^(\d+)\|') {
-                $lastPercent = [int]$Matches[1]
-            }
+function Read-InstallProgress {
+    try { $raw = [IO.File]::ReadAllText($script:ProgressPath).Trim() } catch { return }
+    if ($raw -notmatch '^(\d+)\|([^|]*)\|(\d+)\|(\d+)$') { return }
+    $percent = [int]$Matches[1]
+    $stage = $Matches[2]
+    $received = [long]$Matches[3]
+    $total = [long]$Matches[4]
+    if ($stage -like 'download:*') {
+        $component = if ($stage -like '*VS Code*') { 'VS Code' } else { 'GCC' }
+        if ($total -gt 0) {
+            $mainButton.Text = ('{0}  {1:N1}/{2:N1} MB  ({3}%)' -f $component, ($received / 1MB), ($total / 1MB), $percent)
+        } else {
+            $mainButton.Text = ('{0}  {1:N1} MB' -f $component, ($received / 1MB))
         }
-        if ($lastPercent -ge 0) {
-            $mainButton.Text = ('{0} {1}%' -f $ActionText, $lastPercent)
+    } else {
+        $mainButton.Text = switch ($stage) {
+            'prepare' { 'Подготовка...' }
+            'prepare-vscode-download' { 'Подключаемся к VS Code...' }
+            'prepare-compiler-download' { 'Подключаемся к GCC...' }
+            'verify' { 'Проверяем архив...' }
+            'extract-vscode' { 'Распаковываем VS Code...' }
+            'extract-compiler' { 'Распаковываем GCC...' }
+            'configure' { 'Настраиваем рабочую папку...' }
+            'extension' { 'Устанавливаем расширение...' }
+            'done' { 'Установка завершена' }
+            default { 'Устанавливаем...' }
         }
-        [System.Windows.Forms.Application]::DoEvents()
-        Start-Sleep -Milliseconds 250
     }
-    if (Test-Path -LiteralPath $progressFile) {
-        $rawProgress = Get-Content -LiteralPath $progressFile -ErrorAction SilentlyContinue | Select-Object -Last 1
-        if ($rawProgress -match '^(\d+)\|') {
-            $lastPercent = [int]$Matches[1]
-        }
+}
+
+function Update-Installation {
+    if (-not $script:InstallProcess) { return }
+    Read-InstallProgress
+    if (-not $script:InstallProcess.HasExited) { return }
+    $installTimer.Stop()
+    $exitCode = $script:InstallProcess.ExitCode
+    $script:InstallProcess.Dispose()
+    $script:InstallProcess = $null
+    $cancelled = ($exitCode -eq 1223)
+    $cancelButton.Visible = $false
+    Set-Busy $false
+    Refresh-State | Out-Null
+    if ($cancelled) {
+        $busyLabel.Text = 'Установка отменена. Можно запустить снова.'
+    } elseif ($exitCode -ne 0) {
+        $busyLabel.Text = 'Ошибка установки. Подробности в папке logs.'
     }
-    $mainButton.Text = ('{0} 100%' -f $ActionText)
-    [System.Windows.Forms.Application]::DoEvents()
-    Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue
-    return $process.ExitCode
+    foreach ($file in @($script:ProgressPath, $script:CancelPath)) {
+        if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) }
+    }
+    if ($script:CloseAfterCancel) { $form.Close() }
 }
 
 function Reset-CppBox {
@@ -187,7 +219,7 @@ function New-Button {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'CppBox'
+$form.Text = 'CppBox dev.7 fix.3'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object System.Drawing.Size(664, 356)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
@@ -200,33 +232,17 @@ $panel.Size = New-Object System.Drawing.Size(664, 356)
 $panel.BackColor = $Cream
 $form.Controls.Add($panel)
 
-$script:Dragging = $false
-$script:DragOffset = New-Object System.Drawing.Point(0, 0)
 function Enable-Drag {
     param($Control)
     $Control.Add_MouseDown({
         param($sender, $e)
         if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
-            $script:Dragging = $true
-            $script:DragOffset = New-Object System.Drawing.Point($e.X, $e.Y)
+            [CppBoxWindow]::Drag($form.Handle)
         }
-    })
-    $Control.Add_MouseMove({
-        param($sender, $e)
-        if ($script:Dragging) {
-            $screenPoint = $sender.PointToScreen((New-Object System.Drawing.Point($e.X, $e.Y)))
-            $form.Location = New-Object System.Drawing.Point(($screenPoint.X - $script:DragOffset.X), ($screenPoint.Y - $script:DragOffset.Y))
-        }
-    })
-    $Control.Add_MouseUp({
-        param($sender, $e)
-        $script:Dragging = $false
-    })
-    $Control.Add_MouseLeave({
-        $script:Dragging = $false
     })
 }
 Enable-Drag $panel
+Enable-Drag $form
 
 $titleFont = New-Object System.Drawing.Font -ArgumentList 'Segoe UI', 28, ([System.Drawing.FontStyle]::Bold)
 $subtitleFont = New-Object System.Drawing.Font -ArgumentList 'Segoe UI', 10
@@ -249,20 +265,32 @@ $underline.Location = New-Object System.Drawing.Point(58, 108)
 $underline.Size = New-Object System.Drawing.Size(118, 5)
 $underline.BackColor = $Red
 $panel.Controls.Add($underline)
+Enable-Drag $underline
 
-$subtitle = New-Label 'portable C++ workspace for Windows' 57 126 360 30 $subtitleFont $Muted
+$subtitle = New-Label 'portable C++ workspace for Windows  |  v1.0.1' 57 126 500 30 $subtitleFont $Muted
 $panel.Controls.Add($subtitle)
 Enable-Drag $subtitle
 
 $signature = New-Label (T 'bWFkZSBieSBzcXVhcmVxdWFzYXI=') 526 262 100 40 $smallFont $Muted
 $signature.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 $panel.Controls.Add($signature)
+Enable-Drag $signature
 
 $statusDot = New-Label (T '4peP') 520 62 24 32 (New-Object System.Drawing.Font -ArgumentList 'Segoe UI', 18, ([System.Drawing.FontStyle]::Bold)) $Gray
 $panel.Controls.Add($statusDot)
+Enable-Drag $statusDot
 
-$statusText = New-Label (T '0L/RgNC+0LLQtdGA0Y/Rjg==') 550 68 100 30 $statusFont $Ink
+$statusText = New-Label (T '0L/RgNC+0LLQtdGA0Y/Rjg==') 510 68 100 30 $statusFont $Ink
+$statusText.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
 $panel.Controls.Add($statusText)
+Enable-Drag $statusText
+
+function Align-StatusDot {
+    $textWidth = [System.Windows.Forms.TextRenderer]::MeasureText($statusText.Text, $statusText.Font).Width
+    $textLeft = $statusText.Right - $textWidth
+    $statusDot.Left = $textLeft - $statusDot.Width - 4
+}
+
 
 $mainButton = New-Button (T '0J7RgtC60YDRi9GC0YwgVlMgQ29kZQ==') 54 176 556 70 $true
 $panel.Controls.Add($mainButton)
@@ -271,9 +299,22 @@ $folderButton = New-Button (T '0J/QsNC/0LrQsCDRgSDQutC+0LTQvtC8') 54 262 130 40
 $repairButton = New-Button (T '0J/QvtGH0LjQvdC40YLRjA==') 202 262 130 40
 $panel.Controls.AddRange(@($folderButton, $repairButton))
 
-$busyLabel = New-Label '' 54 252 556 22 $smallFont $Muted
+$busyLabel = New-Label '' 54 318 556 24 $smallFont $Muted
 $panel.Controls.Add($busyLabel)
 
+$cancelButton = New-Button 'Отмена' 350 262 130 40
+$cancelButton.ForeColor = $Red
+$cancelButton.FlatAppearance.BorderColor = $Red
+$cancelButton.Visible = $false
+$cancelButton.Add_Click({ Request-InstallCancel })
+$panel.Controls.Add($cancelButton)
+$cancelButton.BringToFront()
+$script:InstallProcess = $null
+$script:CancelRequested = $false
+$script:CloseAfterCancel = $false
+$installTimer = New-Object System.Windows.Forms.Timer
+$installTimer.Interval = 150
+$installTimer.Add_Tick({ Update-Installation })
 $script:IsBusy = $false
 
 function Set-Busy {
@@ -287,7 +328,6 @@ function Set-Busy {
     if ($MainText -ne '') {
         $mainButton.Text = $MainText
     }
-    [System.Windows.Forms.Application]::DoEvents()
 }
 
 function Refresh-State {
@@ -295,29 +335,43 @@ function Refresh-State {
     if ($state.Ready) {
         $statusDot.ForeColor = $Green
         $statusText.Text = T '0LPQvtGC0L7Qsg=='
+        Align-StatusDot
         $mainButton.Text = T '0J7RgtC60YDRi9GC0YwgVlMgQ29kZQ=='
     } else {
         $statusDot.ForeColor = $Red
         $statusText.Text = T '0L3QtSDQs9C+0YLQvtCy'
+        Align-StatusDot
         $mainButton.Text = T '0KPRgdGC0LDQvdC+0LLQuNGC0YwgQ3BwQm94'
     }
     return $state
 }
 
 function Install-CppBox {
-    Set-Busy $true '' ((T '0YPRgdGC0LDQvdCw0LLQu9C40LLQsNGO') + ' 0%')
+    if ($script:InstallProcess) { return }
+    Set-Busy $true '' 'Подготовка...'
+    $script:CancelRequested = $false
+    $script:CloseAfterCancel = $false
+    $id = [guid]::NewGuid().ToString('N')
+    $script:ProgressPath = Join-Path $Logs ($id + '.progress')
+    $script:CancelPath = Join-Path $Logs ($id + '.cancel')
     try {
-        $exit = Invoke-HiddenPowerShellWithProgress -Arguments @('-File', $SetupScript, '-NoOpen') -ActionText (T '0YPRgdGC0LDQvdCw0LLQu9C40LLQsNGO')
-        if ($exit -ne 0) {
-            [System.Windows.Forms.MessageBox]::Show((T '0KPRgdGC0LDQvdC+0LLQutCwINC90LUg0LfQsNC60L7QvdGH0LjQu9Cw0YHRjCDQvdC+0YDQvNCw0LvRjNC90L4uINCd0LDQttC80LggItCf0L7Rh9C40L3QuNGC0YwiINC4INC/0L7Qv9GA0L7QsdGD0Lkg0LXRidGRINGA0LDQty4='), 'CppBox', 'OK', 'Warning') | Out-Null
-        }
-    }
-    catch {
-        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'CppBox', 'OK', 'Error') | Out-Null
-    }
-    finally {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'powershell.exe'
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $SetupScript, '-NoOpen', '-ProgressFile', $script:ProgressPath, '-CancelFile', $script:CancelPath)
+        $psi.Arguments = (($arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' ')
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+        $script:InstallProcess = [Diagnostics.Process]::Start($psi)
+        $cancelButton.Text = 'Отмена'
+        $cancelButton.Enabled = $true
+        $cancelButton.Visible = $true
+        $installTimer.Start()
+    } catch {
+        $script:InstallProcess = $null
         Set-Busy $false
         Refresh-State | Out-Null
+        $busyLabel.Text = $_.Exception.Message
     }
 }
 
@@ -351,7 +405,6 @@ $folderButton.Add_Click({
     Start-Process explorer.exe -ArgumentList "`"$Workspace`""
 })
 $repairButton.Add_Click({
-    if ($script:IsBusy) { return }
     $answer = [System.Windows.Forms.MessageBox]::Show((T '0KHQsdGA0L7RgdC40YLRjCDQstC90YPRgtGA0LXQvdC90Y7RjiDRg9GB0YLQsNC90L7QstC60YMgQ3BwQm94INC4INC/0L7RgdGC0LDQstC40YLRjCDQt9Cw0L3QvtCy0L4/'), 'CppBox', 'YesNo', 'Question')
     if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
         Set-Busy $true '' (T '0YfQuNC90Y4=')
@@ -367,6 +420,15 @@ $repairButton.Add_Click({
     }
 })
 
+$form.Add_FormClosing({
+    param($sender, $e)
+    if ($script:InstallProcess) {
+        $e.Cancel = $true
+        $script:CloseAfterCancel = $true
+        Request-InstallCancel
+    }
+})
+$form.Add_FormClosed({ $installTimer.Dispose() })
 $form.Add_Shown({ Refresh-State | Out-Null })
 [System.Windows.Forms.Application]::EnableVisualStyles()
 try {

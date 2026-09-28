@@ -1,101 +1,54 @@
-# CppBox
+![CppBox](assets/CppBox_banner.png)
 
-CppBox is a portable C++ workspace for Windows.
+**Portable C++ environment for Windows.**
 
-It bundles a small launcher, an isolated VS Code setup flow, a C++ compiler setup flow, and a clean `workspace` folder for user code.
+![Version](https://img.shields.io/badge/version-v1.0.1-161616)
+![Platform](https://img.shields.io/badge/platform-Windows-555555)
+![Portable](https://img.shields.io/badge/environment-portable-777777)
 
-The goal is simple: download one setup file, run it, open CppBox, write C++.
+[![Download CppBox v1.0.1](https://img.shields.io/badge/Download-CppBox%20v1.0.1-161616?style=for-the-badge)](https://github.com/squarequasar/cppbox/releases/latest)
 
-![CppBox banner](assets/CppBox_banner.png)
+## What is CppBox?
 
-## Download
+CppBox is a portable C++ environment for Windows. Its launcher downloads and keeps VS Code and the WinLibs compiler inside the CppBox folder, so they do not need to be installed system-wide. Your source files stay in a clean `workspace` folder.
 
-Use the release build from:
+## Quick Start
 
-`release/CppBox_v1.0.0.zip`
+1. [Download CppBox v1.0.1](https://github.com/squarequasar/cppbox/releases/latest).
+2. Extract the downloaded ZIP.
+3. Run `CppBox_Setup_v1.0.1.exe`.
+4. Follow the launcher. It creates a `cppbox` folder beside the setup file and a desktop shortcut.
 
-Inside the zip:
+On the first setup, CppBox needs an internet connection to download VS Code, the compiler, and Microsoft's C/C++ Extension Pack. The setup file removes itself after it finishes extracting CppBox. When VS Code asks whether you trust the workspace, choose **Trust**.
 
-`CppBox_Setup_v1.0.0.exe`
+## What's Included
 
-## Install
+| Component | What it does |
+| --- | --- |
+| CppBox launcher | Shows installation progress, supports cancellation, can be moved, displays the version, and provides install, open-folder, and repair actions. |
+| Visual Studio Code | Runs from the CppBox folder with separate user data. |
+| WinLibs GCC and GDB | Compiles and debugs C++ programs without a system-wide compiler install. |
+| Workspace | Keeps `.cpp` source files separate from internal files and build output. |
+| C/C++ Extension Pack | Installed automatically by the setup flow into portable VS Code. |
 
-1. Download `CppBox_Setup_v1.0.0.exe`.
-2. Run it on Windows.
-3. It creates a `cppbox` folder next to itself.
-4. It creates a `CppBox` desktop shortcut.
-5. The setup file deletes itself after installation.
+## Requirements
 
-## First Launch
+- 64-bit Windows.
+- Internet access during the initial environment setup.
+- Enough free disk space for VS Code and the compiler. The exact amount depends on the downloaded versions; no fixed minimum is stated.
 
-Open CppBox from the desktop shortcut or from:
+## Latest Release: CppBox v1.0.1
 
-`cppbox/CppBox.exe`
+CppBox v1.0.1 adds actual download progress with cancellation, a movable launcher that displays its version, and automatic installation of Microsoft's C/C++ Extension Pack.
 
-When VS Code asks whether you trust the workspace, click:
+See the [v1.0.1 release notes](docs/RELEASE_NOTES_v1.0.1.md) or [download the latest release](https://github.com/squarequasar/cppbox/releases/latest).
 
-`Trust`
+Previous release: [CppBox v1.0.0](https://github.com/squarequasar/cppbox/releases/tag/v1.0.0).
 
-or:
+## Developer Information
 
-`Доверять`
-
-This is the normal VS Code workspace trust prompt.
-
-## C++ Extension Pack
-
-After first launch, install:
-
-`C/C++ Extension Pack`
-
-Publisher:
-
-`Microsoft`
-
-This gives VS Code proper C++ highlighting, IntelliSense, and a better editing experience.
-
-## Where To Put Code
-
-Put your `.cpp` files in:
-
-`workspace`
-
-Examples:
-
-`hello.cpp`
-
-`test.cpp`
-
-`main.cpp`
-
-## Running Code
-
-Open the `.cpp` file you want to run and use the VS Code run button.
-
-CppBox is configured so build artifacts do not clutter the visible workspace.
-
-## Repair
-
-If the environment breaks, open the CppBox launcher and press:
-
-`Починить`
-
-This resets the internal VS Code/compiler installation so CppBox can install itself again.
-
-## Repository Structure
-
-`src/Launcher.ps1` - graphical CppBox launcher.
-
-`src/Setup-CppBox.ps1` - installer script for VS Code, compiler, and workspace config.
-
-`src/launcher_src/` - small C wrappers used for the Windows launcher/setup executables.
-
-`assets/` - CppBox logo and Windows icon.
-
-`release/` - final v1.0.0 release artifact and SHA-256 files.
-
-`docs/DEVLOG.txt` - full development log.
-
-## Author
+- [Development log](docs/DEVLOG.txt)
+- [Build notes](docs/BUILD_NOTES.txt)
+- Source: `src/`
 
 made by squarequasar

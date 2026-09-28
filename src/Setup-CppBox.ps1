@@ -1,7 +1,8 @@
-param(
+﻿param(
     [switch]$OpenOnly,
     [switch]$NoOpen,
-    [string]$ProgressFile = ''
+    [string]$ProgressFile = '',
+    [string]$CancelFile = ''
 )
 
 # CppBox setup engine
@@ -10,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $Internal = Split-Path -Parent $PSScriptRoot
 $Root = Split-Path -Parent $Internal
@@ -37,13 +39,19 @@ function Say {
 }
 
 function Set-Progress {
-    param([int]$Percent, [string]$Stage)
+    param(
+        [int]$Percent,
+        [string]$Stage,
+        [long]$BytesReceived = 0,
+        [long]$BytesTotal = 0
+    )
+    Assert-NotCancelled
     if ($ProgressFile) {
         $parent = Split-Path -Parent $ProgressFile
         if ($parent) {
             New-Item -ItemType Directory -Force -Path $parent | Out-Null
         }
-        ('{0}|{1}' -f $Percent, $Stage) | Set-Content -LiteralPath $ProgressFile -Encoding ASCII
+        ('{0}|{1}|{2}|{3}' -f $Percent, $Stage, $BytesReceived, $BytesTotal) | Set-Content -LiteralPath $ProgressFile -Encoding ASCII
     }
 }
 
@@ -87,57 +95,137 @@ function Test-ZipFile {
     }
 }
 
+function Assert-NotCancelled {
+    if ($CancelFile -and [IO.File]::Exists($CancelFile)) {
+        throw [OperationCanceledException]::new('Installation cancelled.')
+    }
+}
+
 function Download-File {
     param([string]$Url, [string]$OutFile, [string]$Name)
-    if (Test-ZipFile $OutFile) {
-        Say "[OK] Cached $Name"
-        return
-    }
-
-    if (Test-Path -LiteralPath $OutFile) {
-        Say "[..] Removing broken cached $Name"
-        Remove-Item -LiteralPath $OutFile -Force
-    }
-
-    $ProgressPreference = 'SilentlyContinue'
-
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        Say "[..] Downloading $Name (attempt $attempt/3)"
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
-        if (Test-ZipFile $OutFile) {
-            Say "[OK] Downloaded $Name"
-            return
+    Assert-NotCancelled
+    if (Test-ZipFile $OutFile) { Say "[OK] Cached $Name"; return }
+    $partial = $OutFile + '.partial'
+    $bits = $null
+    $client = $null
+    try {
+        $downloaded = $false
+        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+            try {
+                $bits = Start-BitsTransfer -Source $Url -Destination $partial -Asynchronous -Priority Foreground -DisplayName "CppBox: $Name" -ErrorAction Stop
+                $stalled = [Diagnostics.Stopwatch]::StartNew()
+                $lastBytes = 0
+                while ($bits.JobState -ne 'Transferred') {
+                    Assert-NotCancelled
+                    if ($bits.JobState -in @('Error', 'Cancelled', 'Suspended')) { throw "BITS: $($bits.JobState)" }
+                    $received = [long]$bits.BytesTransferred
+                    $total = if ($bits.BytesTotal -le [long]::MaxValue) { [long]$bits.BytesTotal } else { 0 }
+                    if ($received -ne $lastBytes) { $stalled.Restart(); $lastBytes = $received }
+                    if ($stalled.Elapsed.TotalSeconds -gt 30) { throw 'BITS stalled.' }
+                    $percent = if ($total -gt 0) { [int][math]::Min(99, [math]::Floor($received * 100.0 / $total)) } else { 0 }
+                    Set-Progress $percent ("download:$Name") $received $total
+                    Start-Sleep -Milliseconds 150
+                    $bits = Get-BitsTransfer -JobId $bits.JobId -ErrorAction Stop
+                }
+                Assert-NotCancelled
+                Complete-BitsTransfer -BitsJob $bits -ErrorAction Stop
+                $bits = $null
+                $downloaded = $true
+            } catch [OperationCanceledException] { throw }
+            catch {
+                if ($bits) { Remove-BitsTransfer -BitsJob $bits -Confirm:$false -ErrorAction SilentlyContinue; $bits = $null }
+                Assert-NotCancelled
+                Say "[..] Switching downloader: $($_.Exception.Message)"
+            }
         }
-        Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+        if (-not $downloaded) {
+            if (-not ('CppBoxTransfer' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
+public sealed class CppBoxTransfer : IDisposable {
+    readonly WebClient client = new WebClient();
+    long received, total;
+    Task active;
+    public long Received { get { return Interlocked.Read(ref received); } }
+    public long Total { get { return Math.Max(0, Interlocked.Read(ref total)); } }
+    public CppBoxTransfer() {
+        client.DownloadProgressChanged += (s, e) => {
+            Interlocked.Exchange(ref received, e.BytesReceived);
+            Interlocked.Exchange(ref total, e.TotalBytesToReceive);
+        };
     }
-
-    throw "$Name download failed: downloaded ZIP is broken."
+    public Task Start(string url, string path) { active = client.DownloadFileTaskAsync(new Uri(url), path); return active; }
+    public void Dispose() { client.CancelAsync(); if (active != null) { try { active.GetAwaiter().GetResult(); } catch {} } client.Dispose(); }
+}
+'@
+            }
+            $client = New-Object CppBoxTransfer
+            $task = $client.Start($Url, $partial)
+            while (-not $task.IsCompleted) {
+                Assert-NotCancelled
+                $received = $client.Received
+                $total = $client.Total
+                $percent = if ($total -gt 0) { [int][math]::Min(99, [math]::Floor($received * 100.0 / $total)) } else { 0 }
+                Set-Progress $percent ("download:$Name") $received $total
+                Start-Sleep -Milliseconds 150
+            }
+            $task.GetAwaiter().GetResult()
+        }
+        Assert-NotCancelled
+        if (-not (Test-ZipFile $partial)) { throw "$Name ZIP is broken." }
+        Move-Item -LiteralPath $partial -Destination $OutFile -Force
+        $size = (Get-Item -LiteralPath $OutFile).Length
+        Set-Progress 100 ("download:$Name") $size $size
+        Say "[OK] Downloaded $Name"
+    } finally {
+        if ($bits) { Remove-BitsTransfer -BitsJob $bits -Confirm:$false -ErrorAction SilentlyContinue }
+        if ($client) { $client.Dispose() }
+        if ([IO.File]::Exists($partial)) { [IO.File]::Delete($partial) }
+    }
 }
 
 function Expand-Clean {
-    param(
-        [string]$Zip,
-        [string]$Destination,
-        [string]$Name,
-        [string]$ExpectedFile
-    )
-    if (Test-Path -LiteralPath $Destination) {
-        $expected = Find-Tool $Destination $ExpectedFile
-        if ($expected) {
-            Say "[OK] $Name already extracted"
-            return
-        }
+    param([string]$Zip, [string]$Destination, [string]$Name, [string]$ExpectedFile)
+    Assert-NotCancelled
+    if ((Test-Path -LiteralPath $Destination) -and (Find-Tool $Destination $ExpectedFile) -and -not (Test-Path -LiteralPath ($Destination + '.extracting'))) {
+        Say "[OK] $Name already extracted"; return
     }
-    if (-not (Test-ZipFile $Zip)) {
-        if (Test-Path -LiteralPath $Zip) {
-            Remove-Item -LiteralPath $Zip -Force
-        }
-        throw "$Name ZIP is broken. Run INSTALL_ONCE.bat again to download it fresh."
-    }
-
-    Say "[..] Extracting $Name"
+    if (-not (Test-ZipFile $Zip)) { throw "$Name ZIP is broken." }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-    Expand-Archive -LiteralPath $Zip -DestinationPath $Destination -Force
+    [IO.File]::WriteAllText(($Destination + '.extracting'), 'incomplete')
+    $base = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
+    $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        foreach ($entry in $archive.Entries) {
+            Assert-NotCancelled
+            $target = [IO.Path]::GetFullPath((Join-Path $Destination $entry.FullName))
+            if (-not $target.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe ZIP entry.' }
+            if (-not $entry.Name) { [IO.Directory]::CreateDirectory($target) | Out-Null; continue }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
+            $inputStream = $entry.Open()
+            $outputStream = $null
+            $token = New-Object Threading.CancellationTokenSource
+            try {
+                $outputStream = [IO.File]::Create($target)
+                $copy = $inputStream.CopyToAsync($outputStream, 81920, $token.Token)
+                while (-not $copy.IsCompleted) {
+                    if ($CancelFile -and [IO.File]::Exists($CancelFile)) { $token.Cancel() }
+                    try { [void]$copy.Wait(30) } catch { Assert-NotCancelled; throw }
+                }
+                try { $copy.GetAwaiter().GetResult() } catch { Assert-NotCancelled; throw }
+                Assert-NotCancelled
+            } finally {
+                if ($outputStream) { $outputStream.Dispose() }
+                $inputStream.Dispose()
+                $token.Dispose()
+            }
+        }
+        Assert-NotCancelled
+        [IO.File]::Delete(($Destination + '.extracting'))
+    } finally { $archive.Dispose() }
     Say "[OK] Extracted $Name"
 }
 
@@ -272,7 +360,42 @@ function Install-Extension {
     $userData = Join-Path $VsCodeData 'user-data'
     $extensions = Join-Path $VsCodeData 'extensions'
     New-Item -ItemType Directory -Force -Path $userData, $extensions | Out-Null
-    & $code --user-data-dir $userData --extensions-dir $extensions --install-extension ms-vscode.cpptools-extension-pack --force
+    Assert-NotCancelled
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = $code
+    $psi.Arguments = '--user-data-dir "' + $userData + '" --extensions-dir "' + $extensions + '" --install-extension ms-vscode.cpptools-extension-pack --force'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
+    $codeRoot = Split-Path -Parent $code
+    $cli = Join-Path $codeRoot 'resources\app\out\cli.js'
+    $codeCmd = Join-Path $codeRoot 'bin\code.cmd'
+    if (Test-Path -LiteralPath $codeCmd) {
+        $cmdText = [IO.File]::ReadAllText($codeCmd)
+        if ($cmdText -match '"%~dp0(?<cli>[^"\r\n]*resources[\\/]app[\\/]out[\\/]cli\.js)"') {
+            $cli = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $codeCmd) $Matches['cli']))
+        }
+    }
+    if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { throw "VS Code CLI not found: $cli" }
+    $psi.EnvironmentVariables['VSCODE_DEV'] = ''
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.Arguments = '"' + $cli + '" ' + $psi.Arguments
+    $extensionProcess = [Diagnostics.Process]::Start($psi)
+    $stdout = $extensionProcess.StandardOutput.ReadToEndAsync()
+    $stderr = $extensionProcess.StandardError.ReadToEndAsync()
+    try {
+        while (-not $extensionProcess.WaitForExit(150)) { Assert-NotCancelled }
+        Assert-NotCancelled
+        $outputText = $stdout.GetAwaiter().GetResult()
+        $errorText = $stderr.GetAwaiter().GetResult()
+        if ($outputText) { Say $outputText.Trim() }
+        if ($errorText) { Say $errorText.Trim() }
+        if ($extensionProcess.ExitCode -ne 0) { throw "Extension installation failed (exit $($extensionProcess.ExitCode))." }
+    } finally {
+        if (-not $extensionProcess.HasExited) { $extensionProcess.Kill(); $extensionProcess.WaitForExit() }
+        $extensionProcess.Dispose()
+    }
     Say '[OK] Extension step finished'
 }
 
@@ -309,7 +432,9 @@ function Stop-CppBoxVSCode-Retry {
     }
 }
 
+try {
 Ensure-Dirs
+if (-not $OpenOnly) { [IO.File]::WriteAllText((Join-Path $Internal 'install-incomplete'), 'incomplete') }
 Set-Progress 3 'prepare'
 
 if ($OpenOnly) {
@@ -325,9 +450,9 @@ if ($OpenOnly) {
 
 Say 'CppBox Native Portable VS Code setup'
 
-Set-Progress 8 'download-vscode'
+Set-Progress 8 'prepare-vscode-download'
 Download-File $VsCodeUrl $VsCodeZip 'VS Code portable ZIP'
-Set-Progress 25 'download-compiler'
+Set-Progress 25 'prepare-compiler-download'
 Download-File $WinLibsUrl $WinLibsZip 'WinLibs GCC ZIP'
 
 Set-Progress 40 'verify'
@@ -352,5 +477,16 @@ if (-not $NoOpen) {
     Open-VSCode
 }
 
+Assert-NotCancelled
+[IO.File]::Delete((Join-Path $Internal 'install-incomplete'))
 Set-Progress 100 'done'
 Say '[OK] Done. Next time launch OPEN_CODE_HERE.bat.'
+
+} catch {
+    if ($CancelFile -and [IO.File]::Exists($CancelFile)) {
+        Say '[CANCELLED] Installation cancelled; completed downloads retained.'
+        exit 1223
+    }
+    Say ('[ERROR] ' + $_.Exception.Message)
+    exit 1
+}

@@ -2,11 +2,16 @@ CppBox build notes
 
 ============================================================
 
-This repository contains the final public source/artifact layout for CppBox v1.0.0.
+This repository contains the v1.0.1 PowerShell sources and public distribution artifacts for both stable releases, v1.0.0 and v1.0.1.
 
-The final release artifact is already included in:
+The v1.0.1 Launcher.ps1 and Setup-CppBox.ps1 were extracted from the payload embedded in its setup executable. Their content is preserved; line endings are normalized to LF for this repository, and the UTF-8 BOM is retained for Windows PowerShell. The native C wrapper sources remain in src/launcher_src/; they are not included in the release ZIP.
+
+The release packages are included in:
 
 release/CppBox_v1.0.0.zip
+release/CppBox_v1.0.1.zip
+
+The v1.0.1 archive contains its setup executable, user README, and full development log.
 
 ============================================================
 
@@ -38,13 +43,15 @@ Single-file setup executable source. It extracts the embedded payload, creates t
 
 ============================================================
 
-Release
+Release history
 
-Final release:
+Current stable release:
 
-v1.0.0
+v1.0.1, based on the stable v1.0.0 release.
 
-Based on:
+First stable release:
+
+v1.0.0, based on:
 
 v0.9.0-rc.4
 
