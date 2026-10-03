@@ -267,7 +267,7 @@ $underline.BackColor = $Red
 $panel.Controls.Add($underline)
 Enable-Drag $underline
 
-$subtitle = New-Label 'portable C++ workspace for Windows  |  v1.0.1' 57 126 500 30 $subtitleFont $Muted
+$subtitle = New-Label 'portable C++ workspace for Windows  |  v1.0.2' 57 126 500 30 $subtitleFont $Muted
 $panel.Controls.Add($subtitle)
 Enable-Drag $subtitle
 

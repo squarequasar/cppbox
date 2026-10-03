@@ -300,25 +300,25 @@ int main() {
     }
     Write-JsonFile (Join-Path $vscodeDir 'settings.json') $settings
 
-    $buildCommand = 'if not exist "' + $Build + '" mkdir "' + $Build + '" && "' + $gpp + '" -std=c++20 -Wall -Wextra "${file}" -o "' + $Build + '\${fileBasenameNoExtension}.exe"'
-    $runCommand = '"' + $Build + '\${fileBasenameNoExtension}.exe"'
+    $compilerBin = Split-Path -Parent $gpp
 
     $tasks = @{
         version = '2.0.0'
         tasks = @(
             @{
                 label = 'Build active C++ file'
-                type = 'shell'
-                command = 'cmd'
-                args = @('/d', '/c', $buildCommand)
+                type = 'process'
+                command = $gpp
+                args = @('-std=c++20', '-g', '-O0', '-Wall', '-Wextra', '${file}', '-o', ($Build + '\${fileBasenameNoExtension}.exe'))
+                options = @{ cwd = '${workspaceFolder}'; env = @{ PATH = ($compilerBin + ';${env:PATH}') } }
                 group = @{ kind = 'build'; isDefault = $true }
                 problemMatcher = @('$gcc')
             },
             @{
                 label = 'Run active C++ exe'
-                type = 'shell'
-                command = 'cmd'
-                args = @('/d', '/c', $runCommand)
+                type = 'process'
+                command = ($Build + '\${fileBasenameNoExtension}.exe')
+                options = @{ cwd = '${workspaceFolder}'; env = @{ PATH = ($compilerBin + ';${env:PATH}') } }
                 dependsOn = 'Build active C++ file'
                 problemMatcher = @()
             }
@@ -330,18 +330,19 @@ int main() {
         version = '0.2.0'
         configurations = @(
             @{
-                name = 'Debug active C++ file'
+                name = 'CppBox: Debug active C++ file'
                 type = 'cppdbg'
                 request = 'launch'
                 program = ($Build + '\${fileBasenameNoExtension}.exe')
                 args = @()
                 stopAtEntry = $false
                 cwd = '${workspaceFolder}'
-                environment = @()
+                environment = @(@{ name = 'PATH'; value = ($compilerBin + ';${env:PATH}') })
                 externalConsole = $false
                 MIMode = 'gdb'
                 miDebuggerPath = $gdb
                 preLaunchTask = 'Build active C++ file'
+                setupCommands = @(@{ text = '-enable-pretty-printing'; ignoreFailures = $true })
             }
         )
     }
