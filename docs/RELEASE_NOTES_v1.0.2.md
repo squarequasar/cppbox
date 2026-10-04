@@ -6,6 +6,8 @@ Fixes the F5 build-and-debug configuration for the active C++ file.
 
 [Download CppBox v1.0.2](https://github.com/squarequasar/cppbox/releases/download/v1.0.2/CppBox_Setup_v1.0.2.exe)
 
+[Optional ZIP package](https://github.com/squarequasar/cppbox/releases/download/v1.0.2/CppBox_v1.0.2.zip) containing the same setup executable.
+
 ## What's Changed
 
 - Runs the compiler directly instead of using a shell command chain.

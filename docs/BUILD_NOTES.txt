@@ -11,9 +11,10 @@ Distribution files:
 release/CppBox_v1.0.0.zip
 release/CppBox_v1.0.1.zip
 release/CppBox_Setup_v1.0.2.exe
+release/CppBox_v1.0.2.zip
 
 The v1.0.1 archive contains its setup executable, user README, and full development log.
-The v1.0.2 release uses a standalone setup executable. Its user README and development log are in docs/README.txt and docs/DEVLOG.txt.
+The v1.0.2 release provides a standalone setup executable and an optional ZIP containing the same executable. Its user README and development log are in docs/README.txt and docs/DEVLOG.txt.
 
 ============================================================
 
