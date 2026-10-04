@@ -219,7 +219,7 @@ function New-Button {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'CppBox dev.7 fix.3'
+$form.Text = 'CppBox v1.0.2'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object System.Drawing.Size(664, 356)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None

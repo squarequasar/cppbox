@@ -481,7 +481,7 @@ if (-not $NoOpen) {
 Assert-NotCancelled
 [IO.File]::Delete((Join-Path $Internal 'install-incomplete'))
 Set-Progress 100 'done'
-Say '[OK] Done. Next time launch OPEN_CODE_HERE.bat.'
+Say '[OK] Done. Open CppBox using its desktop shortcut.'
 
 } catch {
     if ($CancelFile -and [IO.File]::Exists($CancelFile)) {
